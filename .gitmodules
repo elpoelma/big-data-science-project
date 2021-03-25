@@ -1,0 +1,3 @@
+[submodule "spark-scifio"]
+	path = spark-scifio
+	url = git@github.ugent.be:mlippeve/scifio-spark-datasource.git
