@@ -3,19 +3,15 @@ import pyspark
 import numpy as np
 import cv2 as cv
 import math
+from outlier_detection import OutlierModel
 findspark.init()
 
-FAST = cv.xfeatures2d.StarDetector_create(10)
-BRIEF = cv.xfeatures2d.BriefDescriptorExtractor_create()
+surf = cv.xfeatures2d_SURF.create(hessianThreshold=400, upright=True)
 
 
-def load_data():
+def load_data(spark):
     fileLimit = 2
     path = "./data"
-
-    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
-    sc = pyspark.SparkContext(conf=conf)
-    spark = pyspark.sql.SparkSession(sc)
 
     channels = "1,2,3,4,5,6,7,8,9"
     parti = 5
@@ -29,14 +25,11 @@ def load_data():
 
 
 def calc_descriptor(image, features):
-    global FAST
-    global BRIEF
     for i, channel in enumerate(image):
         reshaped = cv.convertScaleAbs(channel)
         reshaped = reshaped.astype('uint8')
-        kp = FAST.detect(reshaped, None)
-        print(kp)
-        _, des = BRIEF.compute(reshaped, kp)
+        _, des = surf.detectAndCompute(reshaped, None)
+        print(des)
 
         print(len(des))
         features["descriptor"].append(des)
@@ -51,7 +44,11 @@ def calc_mean_intensity(image, features):
 def calc_circularity(mask, features):
     features["circularity"] = []
     for i, channel in enumerate(mask):
-        features["circularity"].append(4 * np.pi * features["area"][i] / math.pow(features["perimeter"][i], 2))
+        features["circularity"].append(
+            4 * np.pi * features["area"][i] / math.pow(features["perimeter"][i], 2)
+            if features["perimeter"][i] > 0
+            else 0
+        )
 
 
 def neighbour_count(mat, x, y):
@@ -86,23 +83,49 @@ def calc_area(mask, features):
         features["area"].append(np.count_nonzero(channel))
 
 
-def main():
-    df = load_data()
-    row = df.take(1)[0]
+def calculate_features(row):
     mask = np.reshape(row.mask, (9, row.width, row.height))
     channel_data = np.ma.array(np.reshape(row.data, (9, row.width, row.height)), mask=mask)
     for i, channel in enumerate(channel_data):
         # color_channel = cv.cvtColor(channel, cv.COLOR_GRAY2BGR)
-        cv.imwrite("images/Channel%d.png" % (i+1), channel)
+        cv.imwrite("images/Channel%d.png" % (i + 1), channel)
     features = {}
     calc_area(mask, features)
     calc_perimeter(mask, features)
     calc_circularity(mask, features)
     calc_mean_intensity(channel_data, features)
-    calc_descriptor(channel_data, features)
 
-    for key, value in features.items():
-        print("%s: %s" % (key, str(value)))
+    return [(k, v) for k, v in features.items()]
+
+
+def main():
+    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
+    sc = pyspark.SparkContext(conf=conf)
+    spark = pyspark.sql.SparkSession(sc)
+    spark.sparkContext.setLogLevel('WARN')
+    model = OutlierModel()
+
+    df = load_data(spark)
+
+    # training
+    # df = df.rdd.flatMap(calculate_features)
+    # model.train(df)
+
+    model.read("outlier_model.json")
+    df = df.rdd.map(calculate_features)
+    print(f"count before: {df.count()}")
+    df = df.filter(model.is_no_outlier)
+    print(f"count after: {df.count()}")
+    # for datum in df.rdd.toLocalIterator():
+    #     row = datum[0]
+
+    # calc_descriptor(channel_data, features)
+
+        # model.add_sample(features)
+    # model.write()
+
+    # for key, value in features.items():
+    #     print("%s: %s" % (key, str(value)))
 
 
 if __name__ == '__main__':
