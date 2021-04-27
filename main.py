@@ -9,7 +9,7 @@ def load_data():
     fileLimit = 2
     path = "./data"
 
-    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading").set('spark.jars', './spark-scifio/target/scifio-spark-datasource-fat.jar')
+    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
     sc = pyspark.SparkContext(conf=conf)
     spark = pyspark.sql.SparkSession(sc)
 
