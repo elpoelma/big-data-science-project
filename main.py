@@ -3,11 +3,12 @@ findspark.init()
 
 import pyspark
 from pyspark.sql.functions import avg
+import sys
 
 
 def load_data():
+    path = sys.argv[1]
     fileLimit = 2
-    path = "./data"
 
     conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
     sc = pyspark.SparkContext(conf=conf)
