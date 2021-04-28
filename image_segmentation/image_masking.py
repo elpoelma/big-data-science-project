@@ -10,6 +10,7 @@ from pyspark.ml.linalg import Vectors
 import cv2 as cv
 import csv
 from progresstest import progress_bar
+import json
 
 def init_spark_session():
     conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
@@ -93,26 +94,6 @@ def calculate_masks(cell, threshold1, threshold2, opening_shape):
         predicted_masks = np.concatenate((predicted_masks, mask))
     return predicted_masks, np.array(accuracies)
 
-def parameter_search(cells, channel, threshold1_range, threshold2_range, opening_shape_range):
-    nr_of_channels = 7
-    best_accuracy = 0
-    best_params = []
-    for threshold1 in threshold1_range:
-        for threshold2 in threshold2_range:
-            for opening_shape in opening_shape_range:
-                accuracy = 0
-                for cell in cells:
-                    cell_data = np.reshape(cell.data, (nr_of_channels, cell.width, cell.height)).astype('uint8')[channel]
-                    cell_mask = np.reshape(cell.mask, (nr_of_channels, cell.width, cell.height)).astype('uint8')[channel]
-                    predicted_mask = canny_masking(cell_data, threshold1, threshold2, opening_shape)
-                    mask_acc = balanced_accuracy(cell_mask, predicted_mask)
-                    accuracy += mask_acc
-                accuracy /= len(cells)
-                if accuracy > best_accuracy:
-                    best_accuracy = accuracy
-                    best_params = [threshold1, threshold2, opening_shape]
-    return (best_accuracy, best_params)
-
 
 
 
@@ -151,12 +132,29 @@ class CannyEdgeMaskingModel:
 
 
     def save_model(self, file):
-        pass
+        data = {}
+        for channel in range(self.nr_of_channels):
+            params = self.parameters[channel]
+            data[channel] = {"threshold1": params[0],
+                             "threshold2": params[1],
+                             "opening_shape": params[2]}
+        with open(file, 'w') as jsonfile:
+            json.dump(data, jsonfile)
+
 
     @classmethod
-    def load_model(file):
-        pass
-    
+    def load_model(cls, file):
+        with open(file, 'r') as jsonfile:
+            data = json.load(jsonfile)
+            nr_of_channels = len(data)
+            model = cls(nr_of_channels)
+            for channel in data:
+                model.set_parameters(int(channel), 
+                                     data[channel]["threshold1"],
+                                     data[channel]["threshold2"],
+                                     data[channel]["opening_shape"])
+        return model
+
     def predict(self):
         pass
 
@@ -167,19 +165,11 @@ if __name__ == "__main__":
     fileLimit = 2
 
     df = load_dataframe(spark, path, fileLimit)
-    df = df.limit(100)
-    model = CannyEdgeMaskingModel(7)
+    df = df.limit(10)
+    model = CannyEdgeMaskingModel.load_model("test.json")
+    # model = CannyEdgeMaskingModel(7)
 
-    train_accuracies = model.train(df.rdd, range(10, 111, 10), range(10, 111, 10),[(8, 8)]) 
+    # train_accuracies = model.train(df.rdd, range(10, 111, 10), range(10, 111, 10),[(8, 8)]) 
 
     print("Parameters: " + str(model.parameters))
-    with open('grid_search_results2.csv', 'w', newline='') as file:
-        fields = ['channel', 'threshold1', 'threshold2', 'shape', 'training set balanced accuracy']
-        writer = csv.DictWriter(file, fieldnames=fields)
-        writer.writeheader()
-        for channel in range(7):
-            writer.writerow({fields[0]: channel,
-                            fields[1]: model.parameters[channel][0],
-                            fields[2]: model.parameters[channel][1], 
-                            fields[3]: model.parameters[channel][2], 
-                            fields[4]: train_accuracies[channel]})
+    model.save_model("test.json")
