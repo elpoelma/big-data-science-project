@@ -11,6 +11,7 @@ import cv2 as cv
 import csv
 from progresstest import progress_bar
 import json
+from pyspark.sql import Row
 
 def init_spark_session():
     conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
@@ -79,22 +80,22 @@ def canny_masking(image, threshold1, threshold2, opening_shape):
     mask = apply_opening(edges, shape=opening_shape).astype('bool')
     return mask
 
-def calculate_masks(cell, threshold1, threshold2, opening_shape):
-    nr_of_channels = 7
+def calculate_masks(cell, nr_of_channels, parameters):
     cell_channels = np.reshape(cell.data, (nr_of_channels, cell.width, cell.height)).astype('uint8')
-    cell_masks = np.reshape(cell.mask, (nr_of_channels, cell.width, cell.height))
     predicted_masks = np.array([], dtype='bool')
-    accuracies = []
     for i, cell_channel in enumerate(cell_channels):
-        ground_truth_mask = cell_masks[i]
-        mask = canny_masking(cell_channel, threshold1, threshold2, opening_shape).astype('bool')
-        balanced_acc = balanced_accuracy(mask, ground_truth_mask)
-        accuracies.append(balanced_acc)
+        mask = canny_masking(cell_channel, parameters[i][0], parameters[i][1], parameters[i][2]).astype('bool')
         mask = np.reshape(mask, (cell.width*cell.height))
         predicted_masks = np.concatenate((predicted_masks, mask))
-    return predicted_masks, np.array(accuracies)
+    return predicted_masks
 
-
+def score(ground_truth_masks, predicted_masks, nr_of_channels, mask_width, mask_height):
+    ground_truth_masks = np.reshape(ground_truth_masks, (nr_of_channels, mask_width, mask_height))
+    predicted_masks = np.reshape(predicted_masks, (nr_of_channels, mask_width, mask_height))
+    accuracies = []
+    for i in range(nr_of_channels):
+        accuracies.append(balanced_accuracy(ground_truth_masks[i], predicted_masks[i]))
+    return np.array(accuracies)
 
 
 
@@ -115,12 +116,19 @@ class CannyEdgeMaskingModel:
         for threshold1 in threshold1_range:
             for threshold2 in threshold2_range:
                 for opening_shape in opening_shape_range:
+                    params = [(threshold1, threshold2, opening_shape) for _ in range(self.nr_of_channels)]
                     progress_bar(progress, len(threshold1_range)*len(threshold2_range)*len(opening_shape_range))
-                    accuracy_sums = cells_rdd.map(lambda cell: calculate_masks(cell, threshold1, threshold2, opening_shape))\
-                            .map(lambda x: x[1])\
-                            .aggregate((np.zeros(self.nr_of_channels), 0),
+                    masks_rdd = cells_rdd.map(lambda cell: Row(mask=cell.mask, 
+                                                               predicted_mask=calculate_masks(cell, self.nr_of_channels, params),
+                                                               height=cell.height,
+                                                               width=cell.width))
+                    
+                    accuracies_rdd = masks_rdd.map(lambda mask_row: score(mask_row.mask, mask_row.predicted_mask, self.nr_of_channels, mask_row.width, mask_row.height))
+                    
+                    accuracy_sums = accuracies_rdd.aggregate((np.zeros(self.nr_of_channels), 0),
                                         lambda acc1, acc2: (acc1[0] + acc2, acc1[1] + 1),
                                         lambda acc1, acc2: (acc1[0] + acc2[0], acc1[1] + acc2[1]))
+                            
                     accuracies = accuracy_sums[0]/accuracy_sums[1]
                     for i, accuracy in enumerate(accuracies):
                         if accuracy > best_accuracies[i]:
@@ -152,11 +160,11 @@ class CannyEdgeMaskingModel:
                 model.set_parameters(int(channel), 
                                      data[channel]["threshold1"],
                                      data[channel]["threshold2"],
-                                     data[channel]["opening_shape"])
+                                     tuple(data[channel]["opening_shape"]))
         return model
 
-    def predict(self):
-        pass
+    def predict(self, cells_rdd):
+        cells_rdd.map(lambda cell: Row(data=cell.data, mask=calculate_masks(cell, self.nr_of_channels, self.parameters), height=cell.height, width=cell.width))
 
 if __name__ == "__main__":
     spark = init_spark_session()
@@ -166,10 +174,11 @@ if __name__ == "__main__":
 
     df = load_dataframe(spark, path, fileLimit)
     df = df.limit(10)
-    model = CannyEdgeMaskingModel.load_model("test.json")
-    # model = CannyEdgeMaskingModel(7)
+    #model = CannyEdgeMaskingModel.load_model("test.json")
+    model = CannyEdgeMaskingModel(7)
 
-    # train_accuracies = model.train(df.rdd, range(10, 111, 10), range(10, 111, 10),[(8, 8)]) 
+    train_accuracies = model.train(df.rdd, range(10, 21, 10), range(10, 21, 10),[(8, 8)]) 
 
+    model.predict(df.rdd)
     print("Parameters: " + str(model.parameters))
     model.save_model("test.json")
