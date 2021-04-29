@@ -10,7 +10,7 @@ def load_data():
     path = sys.argv[1]
     fileLimit = 2
 
-    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
+    conf = pyspark.SparkConf().setMaster("local[*]").setAppName("loading")
     sc = pyspark.SparkContext(conf=conf)
     spark = pyspark.sql.SparkSession(sc)
 
