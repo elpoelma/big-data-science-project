@@ -3,13 +3,14 @@ findspark.init()
 
 import pyspark
 from pyspark.sql.functions import avg
+import sys
 
 
 def load_data():
+    path = sys.argv[1]
     fileLimit = 2
-    path = "./data"
 
-    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading").set('spark.jars', './spark-scifio/target/scifio-spark-datasource-fat.jar')
+    conf = pyspark.SparkConf().setMaster("local[*]").setAppName("loading")
     sc = pyspark.SparkContext(conf=conf)
     spark = pyspark.sql.SparkSession(sc)
 
