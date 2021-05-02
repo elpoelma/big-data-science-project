@@ -14,7 +14,7 @@ import json
 from pyspark.sql import Row
 
 def init_spark_session():
-    conf = pyspark.SparkConf().setMaster("local[2]").setAppName("loading")
+    conf = pyspark.SparkConf().setMaster("local[*]").setAppName("loading")
     sc = pyspark.SparkContext(conf=conf)
     spark = pyspark.sql.SparkSession(sc)
     return spark
